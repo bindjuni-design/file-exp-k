@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>EXP TOOL V7 TIME FLEX</title>
+
+<style>
+body{
+background:#050505;
+color:#00ffd5;
+font-family:Arial;
+text-align:center;
+padding:20px;
+}
+.box{
+background:#0f0f0f;
+padding:20px;
+border-radius:12px;
+max-width:700px;
+margin:auto;
+box-shadow:0 0 20px #00ffd5;
+margin-bottom:20px;
+}
+.drop{
+border:2px dashed #00ffd5;
+padding:40px;
+border-radius:10px;
+cursor:pointer;
+}
+input,button{
+width:100%;
+padding:12px;
+margin-top:10px;
+border:none;
+border-radius:6px;
+}
+button{
+background:#00ffd5;
+color:black;
+font-weight:bold;
+}
+.file{
+background:#111;
+margin-top:10px;
+padding:10px;
+border-radius:6px;
+}
+.active{border-left:4px solid #0ff;}
+.expired{border-left:4px solid red;}
+</style>
+
+</head>
+<body>
+
+<div class="box">
+<h2>EXP GENERATOR FLEX</h2>
+
+<div class="drop" onclick="fileInput.click()">
+Klik / Drag File
+<input type="file" id="fileInput" hidden multiple>
+</div>
+
+<input type="text" id="time" placeholder="Contoh: 1s, 10m, 5h, 7d, 1y, 1p">
+
+<button onclick="generate()">Generate</button>
+
+<div id="list"></div>
+</div>
+
+<div class="box">
+<h2>LOADER</h2>
+<input type="file" id="load" multiple>
+<div id="status"></div>
+</div>
+
+<script>
+
+// ===== PARSE TIME FLEX
+function parseTime(str){
+
+str=str.toLowerCase().trim();
+
+if(str==="1p") return "PERM";
+
+let num=parseInt(str);
+let unit=str.replace(num,"");
+
+let ms=0;
+
+switch(unit){
+case "s": ms=num*1000; break;
+case "m": ms=num*60000; break;
+case "h": ms=num*3600000; break;
+case "d": ms=num*86400000; break;
+case "y": ms=num*31536000000; break;
+default: return null;
+}
+
+return Date.now()+ms;
+}
+
+// ===== INVISIBLE
+function toInvisible(str){
+return str.split("").map(c=>{
+return c.charCodeAt(0).toString(2).padStart(8,"0")
+.replace(/0/g,"\u200B")
+.replace(/1/g,"\u200C");
+}).join("\u200D");
+}
+
+function fromInvisible(str){
+let bin=str.split("\u200D").map(s=>{
+return s.replace(/\u200B/g,"0").replace(/\u200C/g,"1");
+});
+return bin.map(b=>String.fromCharCode(parseInt(b,2))).join("");
+}
+
+// ===== ENCRYPT
+function enc(s){return btoa(s)}
+function dec(s){try{return atob(s)}catch{return null}}
+
+// ===== FILE INPUT
+let files=[];
+
+fileInput.onchange=e=>{
+files=[...e.target.files];
+showFiles();
+};
+
+function showFiles(){
+let html="FILE:<br><br>";
+files.forEach(f=>{
+html+=f.name+" ("+f.size+")<br>";
+});
+list.innerHTML=html;
+}
+
+// ===== GENERATE
+async function generate(){
+
+if(files.length===0){
+alert("Upload file dulu!");
+return;
+}
+
+let timeInput=document.getElementById("time").value;
+
+let expire=parseTime(timeInput);
+
+if(!expire){
+alert("Format salah! contoh: 1h, 10m, 7d");
+return;
+}
+
+for(let file of files){
+
+let original=await file.text().catch(()=>null);
+
+let buf=await file.arrayBuffer();
+let hashBuf=await crypto.subtle.digest("SHA-256",buf);
+let hashArr=Array.from(new Uint8Array(hashBuf));
+let hash=hashArr.map(b=>b.toString(16).padStart(2,"0")).join("");
+
+let meta={
+n:file.name,
+s:file.size,
+h:hash,
+e:expire==="PERM"?"PERM":expire,
+u:false,
+d:navigator.userAgent
+};
+
+meta.sig=btoa(meta.n+meta.s+meta.h);
+
+// INVISIBLE META
+let hidden=toInvisible(enc(JSON.stringify(meta)));
+
+let finalData=(original || "") + hidden;
+
+let blob=new Blob([finalData]);
+let a=document.createElement("a");
+a.href=URL.createObjectURL(blob);
+a.download=file.name;
+a.click();
+}
+}
+
+// ===== LOAD
+let licenses=[];
+
+load.onchange=async e=>{
+licenses=[];
+let f=[...e.target.files];
+
+for(let file of f){
+
+let text=await file.text();
+
+let invisible=text.match(/[\u200B\u200C\u200D]+/g);
+
+if(!invisible){
+alert("Tidak ada EXP!");
+continue;
+}
+
+let decoded=dec(fromInvisible(invisible.join("")));
+
+if(!decoded){
+alert("Rusak!");
+continue;
+}
+
+let data=JSON.parse(decoded);
+
+if(data.d !== navigator.userAgent){
+alert("Device beda!");
+continue;
+}
+
+if(btoa(data.n+data.s+data.h) !== data.sig){
+alert("File diedit!");
+continue;
+}
+
+licenses.push(data);
+}
+
+render();
+setInterval(render,1000);
+};
+
+// ===== RENDER
+function render(){
+
+let now=Date.now();
+let html="";
+
+licenses.forEach(d=>{
+
+let status="ACTIVE";
+let cls="active";
+let isi="Normal";
+let disable=false;
+
+if(d.e!=="PERM" && now>d.e){
+status="EXPIRED";
+cls="expired";
+isi="AKSES DITUTUP";
+disable=true;
+}
+
+html+=`
+<div class="file ${cls}">
+<b>${d.n}</b><br>
+Status: ${status}<br>
+Size: ${d.s}<br>
+Isi: ${isi}<br>
+`;
+
+if(!disable){
+html+=`<button onclick="run('${d.n}')">Jalankan</button>`;
+}
+
+html+=`</div>`;
+});
+
+status.innerHTML=html;
+}
+
+// ===== RUN
+function run(name){
+
+let d=licenses.find(x=>x.n===name);
+
+if(!d){
+alert("Invalid!");
+return;
+}
+
+if(d.e!=="PERM" && Date.now()>d.e){
+alert("Expired!");
+return;
+}
+
+if(d.u){
+alert("Sudah dipakai!");
+return;
+}
+
+d.u=true;
+
+alert("Tool aktif: "+name);
+}
+
+</script>
+
+</body>
+</html>
